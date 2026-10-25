@@ -20,6 +20,21 @@
 Соответствие апстриму: `export_vllm` — это официальный «dist»-таргет Dockerfile.rocm (в нём же лежат
 `requirements/`, `tests/`, `examples/`, docker-файлы). Мы не патчим код vLLM — только задаём архитектуру.
 
+## Результат сборки №1 (2026-10-25)
+
+| Параметр | Значение |
+|---|---|
+| Run | [40150282601](https://github.com/msklv/vllm-gfx1103/actions/runs/40150282601) — `success` |
+| Длительность | **32 мин 12 с** (01:21:02 → 01:53:14 UTC), 4 vCPU |
+| Источник | vLLM `v0.25.1`, commit `752a3a504485790a2e8491cacbb35c137339ad34` |
+| База | `rocm/vllm-dev:base` → **torch 2.13.0+rocm10.0.0**, **HIP 7.15.26333** (ROCm 10.0.0) |
+| Артефакт | `vllm-0.25.1+rocm100-cp312-cp312-linux_x86_64.whl`, 48 MiB (205 MiB распакованный), Apache-2.0 |
+| Arch | лог сборки: `-- HIP architectures: gfx1103`, `Building PyTorch for GPU arch: gfx1103` |
+| Проверка бинаря | `_rocm_C.abi3.so` (65.4 MiB): секция `.hip_fatbin` есть, ISA `amdhsa--gfx1103` × 4, `gfx942/gfx1100/gfx1201` — 0 → код только под нашу архитектуру |
+
+Требования на целевой машине: **Python 3.12** (wheel `cp312`), runtime **ROCm 10.0.0** (под него собран
+и линкуется), `torch 2.13.0+rocm10.0.0`.
+
 ## Запуск
 
 ```bash
