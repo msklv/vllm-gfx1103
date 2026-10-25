@@ -25,6 +25,43 @@ python3 -m vllm.entrypoints.openai.api_server \
 Замер на `Qwen/Qwen3-0.6B`: веса 1.12 GiB / 1.96 s, KV 1.89 GiB (17 680 токенов), GTT 4.13 GB
 из 15.13, генерация **59.9–60.9 tok/s** (русский), 4 запроса подряд без ошибок.
 
+## Эмбеддинги и реранк (pooling-задачи, тоже проверено)
+
+Задачи в 0.25 задаются `--runner pooling` + `--convert {embed,classify}` (флага `--task` больше нет).
+
+```bash
+export HSA_OVERRIDE_GFX_VERSION=11.0.0
+
+# эмбеддинги: /v1/embeddings, /v2/embed, /pooling
+python3 -m vllm.entrypoints.openai.api_server \
+  --model /work/models/bge-m3 --served-model-name bge-m3 --port 8001 \
+  --runner pooling --convert embed --enforce-eager \
+  --max-model-len 8192 --gpu-memory-utilization 0.20
+
+# реранк: /rerank, /v1/rerank, /v2/rerank (Cohere), /score
+python3 -m vllm.entrypoints.openai.api_server \
+  --model /work/models/bge-reranker-v2-m3 --served-model-name bge-reranker-v2-m3 --port 8002 \
+  --runner pooling --convert classify --enforce-eager \
+  --max-model-len 1024 --gpu-memory-utilization 0.20
+```
+
+Замеры на 780M (оба сервера одновременно):
+
+| Задача | Модель | Результат |
+|---|---|---|
+| Эмбеддинги | `BAAI/bge-m3` | dim **1024**, 3202 токена за **1.13 с** → **2841 tok/s** (3 прогона, прогрев 3.0 с), GTT ≈1.55 GB |
+| Реранк | `BAAI/bge-reranker-v2-m3` | 4 пары за **515 мс** (≈7.8 пар/с), скоры `0.9972` / `0.0001` / `0.0001` / `0.0`, GTT ≈1.55 GB |
+
+Что учесть:
+
+- реранк включает scoring-API только при `num_labels == 1` (`bge-reranker-v2-m3` подходит), тогда
+  доступны и `/score`, и Cohere-совместимый `/rerank`;
+- KV-кэша у pooling-моделей нет — `--gpu-memory-utilization 0.20` хватает с запасом
+  (два сервера + страж-0.6B ≈ 5.2 GB из 15.13 GTT);
+- веса нужны в **safetensors**: GGUF vLLM не грузит, поэтому `bge-m3` берём с HF в fp32 (2.27 GB)
+  и конвертируем в fp16 (1.14 GB) — на узле с малым диском это принципиально;
+- `--enforce-eager` и `HSA_OVERRIDE_GFX_VERSION=11.0.0` обязательны так же, как для генерации.
+
 ## Чего не делать (проверено, ломается)
 
 | Конфиг | Что происходит |
