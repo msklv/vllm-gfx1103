@@ -19,6 +19,14 @@ on:
         description: "MAX_JOBS for the HIP/C++ build"
         default: "4"
         required: true
+      publish_release:
+        description: "Publish wheel + MANIFEST to a GitHub Release (permanent, unlike artifacts)"
+        type: boolean
+        default: true
+      release_tag:
+        description: "Release tag override (default: build-<vllm_ref>-rocm<ver>-<arch>)"
+        default: ""
+        required: false
 
 permissions:
   contents: write
@@ -52,8 +60,12 @@ jobs:
 
       - name: Report base image toolchain
         run: |
-          docker run --rm "${{ inputs.base_image }}" bash -lc 'cat /opt/rocm/.info/version' || echo "ROCm version unknown"
-          docker run --rm "${{ inputs.base_image }}" python3 -c 'import torch; print("torch", torch.__version__, "hip", torch.version.hip)' || echo "torch absent in base image"
+          set -uo pipefail
+          rocm=$(docker run --rm "${{ inputs.base_image }}" bash -lc 'cat /opt/rocm/.info/version' 2>/dev/null || echo unknown)
+          torch=$(docker run --rm "${{ inputs.base_image }}" python3 -c 'import torch;print(torch.__version__+" (hip "+str(torch.version.hip)+")")' 2>/dev/null || echo absent)
+          printf 'base_image=%s\nrocm=%s\ntorch=%s\n' "${{ inputs.base_image }}" "$rocm" "$torch" | tee toolchain.txt
+          echo "ROCm: $rocm"
+          echo "torch: $torch"
 
       - name: Build ROCm wheel (target export_vllm)
         working-directory: ${{ env.VLLM_SRC }}
@@ -76,9 +88,65 @@ jobs:
           find "$VLLM_SRC/out" -name '*.whl' -exec cp -v {} wheel/ \;
           ls -l wheel/
 
-      - name: Upload wheel artifact
+      - name: Manifest and checksums
+        run: |
+          set -euo pipefail
+          whl=$(ls wheel/*.whl | head -1)
+          sha=$(sha256sum "$whl" | cut -d' ' -f1)
+          size=$(stat -c%s "$whl")
+          {
+            echo "wheel:          $(basename "$whl")"
+            echo "sha256:         $sha"
+            echo "size:           $size bytes"
+            echo "license:        Apache-2.0"
+            echo "source ref:     ${{ inputs.vllm_ref }}"
+            echo "source commit:  $(git -C "$VLLM_SRC" rev-parse HEAD)"
+            echo "build base:     $(grep '^base_image=' toolchain.txt | cut -d= -f2-)"
+            echo "rocm:           $(grep '^rocm=' toolchain.txt | cut -d= -f2-)"
+            echo "torch:          $(grep '^torch=' toolchain.txt | cut -d= -f2-)"
+            echo "build arch:     ${{ inputs.arch }}  (PYTORCH_ROCM_ARCH)"
+            echo "build host:     GitHub Actions ${RUNNER_OS}/${RUNNER_ARCH}, run ${{ github.run_id }}"
+            echo ""
+            echo "Upstream vLLM does not officially support gfx1103. The wheel is not smoke-tested on"
+            echo "hardware (CI runner has no GPU). See docs/run-on-780m.md before the first run."
+          } > wheel/MANIFEST.txt
+          sha256sum wheel/MANIFEST.txt
+          cat wheel/MANIFEST.txt
+
+      - name: Upload wheel artifact (30 days)
         uses: actions/upload-artifact@v4
         with:
           name: vllm-rocm-${{ inputs.arch }}-${{ inputs.vllm_ref }}
-          path: wheel/*.whl
+          path: |
+            wheel/*.whl
+            wheel/MANIFEST.txt
           retention-days: 30
+
+      - name: Publish GitHub Release (permanent)
+        if: ${{ inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.release_tag }}"
+          if [ -z "$tag" ]; then
+            rocm=$(grep '^rocm=' toolchain.txt | cut -d= -f2- | tr -d '[:space:]')
+            tag="build-${{ inputs.vllm_ref }}-rocm${rocm:-unknown}-${{ inputs.arch }}"
+          fi
+          title="vLLM ${{ inputs.vllm_ref }} + ROCm/${{ inputs.arch }} wheel"
+          base=$(grep '^base_image=' toolchain.txt | cut -d= -f2-)
+          tor=$(grep '^torch=' toolchain.txt | cut -d= -f2-)
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag exists — assets will be replaced"
+          else
+            gh release create "$tag" --title "$title" --notes "wheel for ${{ inputs.arch }}; see MANIFEST.txt"
+          fi
+          gh release upload "$tag" wheel/*.whl wheel/MANIFEST.txt --clobber
+          gh release edit "$tag" --title "$title" --notes "$(printf '%s\n\n' \
+            "Wheel собран из апстрима \`vllm-project/vllm\` на тег \`${{ inputs.vllm_ref }}\` под \`${{ inputs.arch }}\`." \
+            "- база: \`${base}\` — ROCm $(grep '^rocm=' toolchain.txt | cut -d= -f2-), torch ${tor}" \
+            "- CI: run ${{ github.run_id }}, $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            "- на железе не проверялся: у раннера нет GPU, порядок запуска — \`docs/run-on-780m.md\`" \
+            "" "sha256 и требования — в \`MANIFEST.txt\`.")"
+          gh release view "$tag" --json tagName,url --jq '"release: \(.url)"'
+
