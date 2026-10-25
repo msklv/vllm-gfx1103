@@ -35,6 +35,26 @@
 Требования на целевой машине: **Python 3.12** (wheel `cp312`), runtime **ROCm 10.0.0** (под него собран
 и линкуется), `torch 2.13.0+rocm10.0.0`.
 
+## Где лежит результат
+
+| Место | Срок жизни |
+|---|---|
+| **GitHub Release** `build-<vllm_ref>-rocm<ver>-<arch>` — [build-v0.25.1-rocm10.0.0-gfx1103](https://github.com/msklv/vllm-gfx1103/releases/tag/build-v0.25.1-rocm10.0.0-gfx1103) | **бессрочно** (ассеты релиза не истекают) |
+| Артефакт прогона (Actions → run → Artifacts) | 30 дней |
+
+В релиз кладутся `*.whl` и `MANIFEST.txt` (sha256, размер, источник + commit, база, ROCm/torch, arch,
+номер прогона, требования к рантайму). Повторный запуск с теми же `vllm_ref`/`arch` **перезаписывает
+ассеты того же тега** (`--clobber`), поэтому тег всегда указывает на последнюю удачную сборку этой
+комбинации; для параллельных вариантов есть вход `release_tag`.
+
+Скачать:
+
+```bash
+gh release download build-v0.25.1-rocm10.0.0-gfx1103 -R msklv/vllm-gfx1103 -D ./wheel
+sha256sum -c <(grep sha256 ./wheel/MANIFEST.txt | awk '{print $2"  ./wheel/"$1}')
+```
+
+
 ## Запуск
 
 ```bash
