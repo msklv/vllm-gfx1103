@@ -61,11 +61,15 @@ jobs:
       - name: Report base image toolchain
         run: |
           set -uo pipefail
-          rocm=$(docker run --rm "${{ inputs.base_image }}" bash -lc 'cat /opt/rocm/.info/version' 2>/dev/null || echo unknown)
+          rocm=$(docker run --rm "${{ inputs.base_image }}" python3 -c "import re,torch;m=re.search(r'\+rocm([0-9.]+)', torch.__version__);print(m.group(1) if m else '')" 2>/dev/null || true)
           torch=$(docker run --rm "${{ inputs.base_image }}" python3 -c 'import torch;print(torch.__version__+" (hip "+str(torch.version.hip)+")")' 2>/dev/null || echo absent)
-          printf 'base_image=%s\nrocm=%s\ntorch=%s\n' "${{ inputs.base_image }}" "$rocm" "$torch" | tee toolchain.txt
-          echo "ROCm: $rocm"
+          printf 'base_image=%s\nrocm=%s\ntorch=%s\n' "${{ inputs.base_image }}" "${rocm:-unknown}" "$torch" | tee toolchain.txt
+          echo "ROCm (из torch): ${rocm:-unknown}"
           echo "torch: $torch"
+          if [ -z "$rocm" ]; then
+            echo "::error::не удалось определить версию ROCm из torch — тег релиза будет некорректным, останавливаюсь"
+            exit 1
+          fi
 
       - name: Build ROCm wheel (target export_vllm)
         working-directory: ${{ env.VLLM_SRC }}
