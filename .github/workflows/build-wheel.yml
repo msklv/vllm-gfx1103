@@ -1,0 +1,84 @@
+name: build vLLM ROCm wheel (gfx1103)
+
+on:
+  workflow_dispatch:
+    inputs:
+      vllm_ref:
+        description: "vLLM tag/commit to build"
+        default: "v0.25.1"
+        required: true
+      base_image:
+        description: "ROCm base image (needs ROCm >= 7.1 for gfx1103 rocBLAS kernels)"
+        default: "rocm/vllm-dev:base"
+        required: true
+      arch:
+        description: "PYTORCH_ROCM_ARCH (LLVM target of the iGPU)"
+        default: "gfx1103"
+        required: true
+      max_jobs:
+        description: "MAX_JOBS for the HIP/C++ build"
+        default: "4"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  VLLM_SRC: vllm-src
+
+jobs:
+  build-wheel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Disk before build
+        run: df -h /
+
+      - name: Clone vLLM ref
+        run: |
+          git clone --depth 1 --branch "${{ inputs.vllm_ref }}" https://github.com/vllm-project/vllm.git "$VLLM_SRC"
+          git -C "$VLLM_SRC" log -1 --format='source commit: %H %s'
+
+      - name: Report base image toolchain
+        run: |
+          docker run --rm "${{ inputs.base_image }}" bash -lc 'cat /opt/rocm/.info/version' || echo "ROCm version unknown"
+          docker run --rm "${{ inputs.base_image }}" python3 -c 'import torch; print("torch", torch.__version__, "hip", torch.version.hip)' || echo "torch absent in base image"
+
+      - name: Build ROCm wheel (target export_vllm)
+        working-directory: ${{ env.VLLM_SRC }}
+        run: |
+          set -euo pipefail
+          docker buildx create --name gfx --driver docker-container --use
+          docker buildx build \
+            --target export_vllm \
+            --build-arg BASE_IMAGE="${{ inputs.base_image }}" \
+            --build-arg ARG_PYTORCH_ROCM_ARCH="${{ inputs.arch }}" \
+            --build-arg MAX_JOBS="${{ inputs.max_jobs }}" \
+            --output type=local,dest=./out \
+            -f docker/Dockerfile.rocm .
+          df -h /
+
+      - name: Collect wheel
+        run: |
+          set -euo pipefail
+          mkdir -p wheel
+          find "$VLLM_SRC/out" -name '*.whl' -exec cp -v {} wheel/ \;
+          ls -l wheel/
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vllm-rocm-${{ inputs.arch }}-${{ inputs.vllm_ref }}
+          path: wheel/*.whl
+          retention-days: 30
