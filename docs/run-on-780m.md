@@ -67,7 +67,7 @@ python3 -m vllm.entrypoints.openai.api_server \
 | Конфиг | Что происходит |
 |---|---|
 | `--max-model-len 2048 --gpu-memory-utilization 0.35` + prefix-caching по умолчанию | после загрузки весов `HW Exception … GPU Hang`, ядро делает `amdgpu: GPU reset` |
-| колесо только с `gfx1103` + `HSA_OVERRIDE_GFX_VERSION=11.0.0` | `hipErrorInvalidImage` на первом vLLM-ядре |
+| wheel только с `gfx1103` + `HSA_OVERRIDE_GFX_VERSION=11.0.0` | `hipErrorInvalidImage` на первом vLLM-ядре |
 | любой запуск без `HSA_OVERRIDE_GFX_VERSION` | `hipErrorInvalidKernelFile` на `torch.randn` |
 | `VLLM_ATTENTION_BACKEND=TRITON_ATTN` | в 0.25.1 игнорируется: в логе `Overriding with ROCM_ATTN out of potential backends` |
 
