@@ -64,6 +64,53 @@ gh run list -R msklv/vllm-gfx1103 --limit 3
 gh run watch <run-id> -R msklv/vllm-gfx1103
 ```
 
+## Проверено на железе (2026-10-25, Radeon 780M, k8s-04)
+
+| Параметр | Результат |
+|---|---|
+| `rocminfo` | `gfx1103`, `amdgcn-amd-amdhsa--gfx1103`, AMD Radeon 780M Graphics |
+| torch | `avail True`, `gcnArchName: gfx1103` (без override), `total_memory` = GTT 14.09 GiB |
+| Колесо из релиза | скачано подом с GitHub, 6.3 MB/s, sha256 = MANIFEST ✅ |
+| vLLM | `0.25.1`, `Qwen3ForCausalLM`, загрузка весов **1.12 GiB / 1.96 s** |
+| KV-кэш | 1.89 GiB → **17 680 токенов** при `--max-model-len 1024` |
+| GTT после загрузки | **4.13 GB** из 15.13 (RAM ноды: 7 GiB used из 28) |
+| Генерация (рус.) | **59.9–60.9 tok/s**, стабильно на 4 запросах подряд |
+| GPU reset | 1 раз при неудачном конфиге, после подбора флагов — 0 |
+
+### Обязательное: сборка под ДВЕ архитектуры
+
+Чистое `gfx1103` колесо на APU **не работает**, проверено оба режима:
+
+| Режим | `torch.randn` (ядра torch) | `torch.ops._C.rms_norm` (наши ядра) |
+|---|---|---|
+| без `HSA_OVERRIDE_GFX_VERSION` | ❌ `hipErrorInvalidKernelFile` | не проверяется (torch падает раньше) |
+| `HSA_OVERRIDE_GFX_VERSION=11.0.0` | ✅ (устройство рапортует `gfx1100`) | ❌ `hipErrorInvalidImage` — в fatbin только `amdhsa--gfx1103` |
+
+Причина: официальный torch в `rocm/vllm-dev:base` собран без кодобъектов gfx1103. Поэтому:
+
+```bash
+gh workflow run build-wheel.yml -R msklv/vllm-gfx1103 \
+  -f vllm_ref=v0.25.1 -f 'arch=gfx1103;gfx1100' -f max_jobs=4 \
+  -f release_tag=build-v0.25.1-rocm10.0.0-gfx1103-gfx1100
+```
+
+Dual-arch колесо (68.5 MB, fatbin `10 × gfx1100` + `10 × gfx1103`) с `HSA_OVERRIDE_GFX_VERSION=11.0.0`
+даёт рабочий vLLM: torch и наши ядра оба идут gfx1100-кодом.
+
+### Рабочая команда на APU
+
+```bash
+export HSA_OVERRIDE_GFX_VERSION=11.0.0
+python3 -m vllm.entrypoints.openai.api_server \
+  --model <model> --served-model-name <name> --port 8000 \
+  --enforce-eager --max-model-len 1024 --gpu-memory-utilization 0.25 \
+  --no-enable-prefix-caching
+```
+
+`--max-model-len 2048 --gpu-memory-utilization 0.35` (с prefix-caching по умолчанию) привёл к
+**GPU Hang** и сбросу драйвера на профилировке KV — этот конфиг на APU не использовать.
+
+
 Кандидаты базового образа (Docker Hub `rocm/vllm-dev`):
 
 | Тег | Размер | Заметка |
